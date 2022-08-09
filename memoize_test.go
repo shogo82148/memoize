@@ -15,6 +15,9 @@ func TestDo(t *testing.T) {
 	nowFunc = func() time.Time {
 		return now
 	}
+	defer func() {
+		nowFunc = time.Now
+	}()
 
 	var calls int
 	var g Group[string, int]
