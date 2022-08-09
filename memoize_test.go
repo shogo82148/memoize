@@ -21,7 +21,10 @@ func TestDo(t *testing.T) {
 
 	var calls int
 	var g Group[string, int]
-	fn := func(ctx context.Context) (int, time.Time, error) {
+	fn := func(ctx context.Context, key string) (int, time.Time, error) {
+		if key != "foobar" {
+			t.Errorf("want foobar, got %q", key)
+		}
 		calls++
 		return calls, now.Add(ttl), nil
 	}
@@ -75,7 +78,7 @@ func TestDo(t *testing.T) {
 func TestDoErr(t *testing.T) {
 	var g Group[string, any]
 	someErr := errors.New("Some error")
-	v, expiresAt, err := g.Do(context.Background(), "key", func(ctx context.Context) (any, time.Time, error) {
+	v, expiresAt, err := g.Do(context.Background(), "key", func(ctx context.Context, _ string) (any, time.Time, error) {
 		return nil, time.Time{}, someErr
 	})
 	if err != someErr {
@@ -94,7 +97,7 @@ func TestDoDupSuppress(t *testing.T) {
 	var wg1, wg2 sync.WaitGroup
 	c := make(chan string, 1)
 	var calls int32
-	fn := func(ctx context.Context) (string, time.Time, error) {
+	fn := func(ctx context.Context, _ string) (string, time.Time, error) {
 		if atomic.AddInt32(&calls, 1) == 1 {
 			// First invocation.
 			wg1.Done()
@@ -139,7 +142,7 @@ func TestDoCancel(t *testing.T) {
 	ch := make(chan struct{}, 1)
 	ch1 := make(chan struct{}, 1)
 	ch2 := make(chan struct{}, 1)
-	fn := func(ctx context.Context) (any, time.Time, error) {
+	fn := func(ctx context.Context, _ string) (any, time.Time, error) {
 		<-ctx.Done() // block the execution until ctx is canceled.
 		if err := ctx.Err(); err != context.Canceled {
 			t.Errorf("want context.Canceled, got %v", err)
@@ -223,7 +226,7 @@ func TestDoCancel(t *testing.T) {
 func benchmarkDo(parallelism int) func(b *testing.B) {
 	return func(b *testing.B) {
 		b.SetParallelism(parallelism)
-		fn := func(ctx context.Context) (int, time.Time, error) {
+		fn := func(ctx context.Context, _ *testing.PB) (int, time.Time, error) {
 			time.Sleep(5 * time.Millisecond)
 			return 0, time.Now().Add(10 * time.Millisecond), nil
 		}

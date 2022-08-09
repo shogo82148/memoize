@@ -36,7 +36,7 @@ type result[V any] struct {
 }
 
 // Do calls memoized Func.
-func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context) (val V, expiresAt time.Time, err error)) (V, time.Time, error) {
+func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context, key K) (val V, expiresAt time.Time, err error)) (V, time.Time, error) {
 	now := nowFunc()
 
 	g.mu.Lock()
@@ -92,10 +92,10 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	}
 }
 
-func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn func(ctx context.Context) (V, time.Time, error)) {
+func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn func(ctx context.Context, key K) (V, time.Time, error)) {
 	defer c.cancel()
 
-	v, expiresAt, err := fn(c.ctx)
+	v, expiresAt, err := fn(c.ctx, key)
 	ret := result[V]{
 		val:       v,
 		expiresAt: expiresAt,
