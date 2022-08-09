@@ -214,3 +214,28 @@ func TestDoCancel(t *testing.T) {
 		t.Fatalf("Do hangs")
 	}
 }
+
+func benchmarkDo(parallelism int) func(b *testing.B) {
+	return func(b *testing.B) {
+		b.SetParallelism(parallelism)
+		fn := func(ctx context.Context) (int, time.Time, error) {
+			return 0, time.Now().Add(10 * time.Millisecond), nil
+		}
+		var g Group[*testing.PB, int]
+		b.RunParallel(func(p *testing.PB) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			for p.Next() {
+				g.Do(ctx, p, fn)
+			}
+		})
+	}
+}
+
+func BenchmarkDo(b *testing.B) {
+	b.Run("1", benchmarkDo(1))
+	b.Run("10", benchmarkDo(10))
+	b.Run("100", benchmarkDo(100))
+	b.Run("1000", benchmarkDo(1000))
+	b.Run("10000", benchmarkDo(10000))
+}
