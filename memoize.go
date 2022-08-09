@@ -117,3 +117,16 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 		ch <- ret
 	}
 }
+
+func (g *Group[K, V]) GC() {
+	now := nowFunc()
+	g.mu.Lock()
+	for key, e := range g.m {
+		e.mu.RLock()
+		if !now.Before(e.expiresAt) && (e.call == nil || e.call.runs == 0) {
+			delete(g.m, key)
+		}
+		e.mu.RUnlock()
+	}
+	g.mu.Unlock()
+}

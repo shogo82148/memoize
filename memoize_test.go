@@ -41,6 +41,7 @@ func TestDo(t *testing.T) {
 	// the cache is still available, fn should not be called.
 	now = now.Add(ttl - 1)
 
+	g.GC()
 	got, expiresAt, err = g.Do(context.Background(), "foobar", fn)
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +56,7 @@ func TestDo(t *testing.T) {
 	// the cache is expired, so fn should be called.
 	now = now.Add(1)
 
+	g.GC()
 	got, expiresAt, err = g.Do(context.Background(), "foobar", fn)
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +67,9 @@ func TestDo(t *testing.T) {
 	if expiresAt.Unix() != 1234567892 {
 		t.Errorf("want %d, got %d", 1234567892, expiresAt.Unix())
 	}
+
+	now = now.Add(ttl)
+	g.GC()
 }
 
 func TestDoErr(t *testing.T) {
@@ -219,6 +224,7 @@ func benchmarkDo(parallelism int) func(b *testing.B) {
 	return func(b *testing.B) {
 		b.SetParallelism(parallelism)
 		fn := func(ctx context.Context) (int, time.Time, error) {
+			time.Sleep(5 * time.Millisecond)
 			return 0, time.Now().Add(10 * time.Millisecond), nil
 		}
 		var g Group[*testing.PB, int]
