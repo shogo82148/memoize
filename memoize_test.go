@@ -27,41 +27,50 @@ func TestDo(t *testing.T) {
 	}
 
 	// first call
-	got, err := g.Do(context.Background(), "foobar", fn)
+	got, expiresAt, err := g.Do(context.Background(), "foobar", fn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != 1 {
 		t.Errorf("want 1, got %d", got)
+	}
+	if expiresAt.Unix() != 1234567891 {
+		t.Errorf("want %d, got %d", 1234567891, expiresAt.Unix())
 	}
 
 	// the cache is still available, fn should not be called.
 	now = now.Add(ttl - 1)
 
-	got, err = g.Do(context.Background(), "foobar", fn)
+	got, expiresAt, err = g.Do(context.Background(), "foobar", fn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != 1 {
 		t.Errorf("want 1, got %d", got)
 	}
+	if expiresAt.Unix() != 1234567891 {
+		t.Errorf("want %d, got %d", 1234567891, expiresAt.Unix())
+	}
 
 	// the cache is expired, so fn should be called.
 	now = now.Add(1)
 
-	got, err = g.Do(context.Background(), "foobar", fn)
+	got, expiresAt, err = g.Do(context.Background(), "foobar", fn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != 2 {
 		t.Errorf("want 2, got %d", got)
 	}
+	if expiresAt.Unix() != 1234567892 {
+		t.Errorf("want %d, got %d", 1234567892, expiresAt.Unix())
+	}
 }
 
 func TestDoErr(t *testing.T) {
 	var g Group[string, any]
 	someErr := errors.New("Some error")
-	v, err := g.Do(context.Background(), "key", func(ctx context.Context) (any, time.Time, error) {
+	v, expiresAt, err := g.Do(context.Background(), "key", func(ctx context.Context) (any, time.Time, error) {
 		return nil, time.Time{}, someErr
 	})
 	if err != someErr {
@@ -69,6 +78,9 @@ func TestDoErr(t *testing.T) {
 	}
 	if v != nil {
 		t.Errorf("unexpected non-nil value %#v", v)
+	}
+	if !expiresAt.IsZero() {
+		t.Errorf("want expiresAt is zero, got %s", expiresAt)
 	}
 }
 
@@ -87,7 +99,7 @@ func TestDoDupSuppress(t *testing.T) {
 
 		time.Sleep(10 * time.Millisecond) // let more goroutines enter Do
 
-		return v, time.Time{}, nil
+		return v, nowFunc(), nil
 	}
 
 	const n = 10
@@ -98,7 +110,7 @@ func TestDoDupSuppress(t *testing.T) {
 		go func() {
 			defer wg2.Done()
 			wg1.Done()
-			v, err := g.Do(context.Background(), "key", fn)
+			v, _, err := g.Do(context.Background(), "key", fn)
 			if err != nil {
 				t.Errorf("Do error: %v", err)
 				return
@@ -137,7 +149,7 @@ func TestDoCancel(t *testing.T) {
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
 	go func() {
-		_, err := g.Do(ctx1, "key", fn)
+		_, _, err := g.Do(ctx1, "key", fn)
 		if err != context.Canceled {
 			t.Errorf("want context.Canceled, got %v", err)
 		}
@@ -148,7 +160,7 @@ func TestDoCancel(t *testing.T) {
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	go func() {
-		_, err := g.Do(ctx2, "key", fn)
+		_, _, err := g.Do(ctx2, "key", fn)
 		if err != context.Canceled {
 			t.Errorf("want context.Canceled, got %v", err)
 		}

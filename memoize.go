@@ -29,12 +29,13 @@ type call[V any] struct {
 }
 
 type result[V any] struct {
-	val V
-	err error
+	val       V
+	expiresAt time.Time
+	err       error
 }
 
 // Do calls memoized Func.
-func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context) (val V, expiresAt time.Time, err error)) (V, error) {
+func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context) (val V, expiresAt time.Time, err error)) (V, time.Time, error) {
 	now := nowFunc()
 
 	g.mu.Lock()
@@ -45,18 +46,21 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	var ok bool
 	if e, ok = g.m[key]; ok {
 		if now.Before(e.expiresAt) {
+			// the cache is available.
+			val, expiresAt := e.val, e.expiresAt
 			g.mu.Unlock()
-			return e.val, nil
+			return val, expiresAt, nil
 		}
 	} else {
+		// there is no entry. create a new one.
 		e = &entry[V]{}
 		g.m[key] = e
 	}
 
 	// the cache is expired or unavailable.
-	// call g.Func
 	c := e.call
 	if c == nil {
+		// it is the first call.
 		c = new(call[V])
 		c.ctx, c.cancel = context.WithCancel(context.Background())
 		e.call = c
@@ -69,7 +73,7 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 
 	select {
 	case ret := <-ch:
-		return ret.val, ret.err
+		return ret.val, ret.expiresAt, ret.err
 	case <-ctx.Done():
 		g.mu.Lock()
 		c.runs--
@@ -79,7 +83,7 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 		}
 		g.mu.Unlock()
 		var zero V
-		return zero, ctx.Err()
+		return zero, time.Time{}, ctx.Err()
 	}
 }
 
@@ -88,8 +92,9 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 
 	v, expiresAt, err := fn(c.ctx)
 	ret := result[V]{
-		val: v,
-		err: err,
+		val:       v,
+		expiresAt: expiresAt,
+		err:       err,
 	}
 
 	// save to the cache
