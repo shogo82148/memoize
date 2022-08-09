@@ -16,6 +16,7 @@ type Group[K comparable, V any] struct {
 }
 
 type entry[V any] struct {
+	mu        sync.RWMutex
 	val       V
 	expiresAt time.Time
 	call      *call[V]
@@ -45,9 +46,11 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	var e *entry[V]
 	var ok bool
 	if e, ok = g.m[key]; ok {
-		if now.Before(e.expiresAt) {
+		e.mu.RLock()
+		val, expiresAt := e.val, e.expiresAt
+		e.mu.RUnlock()
+		if now.Before(expiresAt) {
 			// the cache is available.
-			val, expiresAt := e.val, e.expiresAt
 			g.mu.Unlock()
 			return val, expiresAt, nil
 		}
@@ -56,8 +59,10 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 		e = &entry[V]{}
 		g.m[key] = e
 	}
+	g.mu.Unlock()
 
 	// the cache is expired or unavailable.
+	e.mu.Lock()
 	c := e.call
 	if c == nil {
 		// it is the first call.
@@ -69,24 +74,19 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	ch := make(chan result[V], 1)
 	c.chans = append(c.chans, ch)
 	c.runs++
-	g.mu.Unlock()
+	e.mu.Unlock()
 
 	select {
 	case ret := <-ch:
 		return ret.val, ret.expiresAt, ret.err
 	case <-ctx.Done():
-		now := nowFunc()
-		g.mu.Lock()
+		e.mu.Lock()
 		c.runs--
 		if c.runs == 0 {
 			c.cancel()
 			e.call = nil // to avoid adding new channels to c.chans
-			if !now.Before(e.expiresAt) {
-				// the cache is expired. delete it.
-				delete(g.m, key)
-			}
 		}
-		g.mu.Unlock()
+		e.mu.Unlock()
 		var zero V
 		return zero, time.Time{}, ctx.Err()
 	}
@@ -103,19 +103,14 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 	}
 
 	// save to the cache
-	now := nowFunc()
-	g.mu.Lock()
+	e.mu.Lock()
 	e.call = nil // to avoid adding new channels to c.chans
 	chans := c.chans
 	if err == nil {
 		e.val = v
 		e.expiresAt = expiresAt
 	}
-	if !now.Before(e.expiresAt) {
-		// the cache is expired. delete it.
-		delete(g.m, key)
-	}
-	g.mu.Unlock()
+	e.mu.Unlock()
 
 	// notify the result to the callers
 	for _, ch := range chans {

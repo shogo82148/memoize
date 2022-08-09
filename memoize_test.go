@@ -171,7 +171,10 @@ func TestDoCancel(t *testing.T) {
 	for {
 		time.Sleep(time.Millisecond)
 		g.mu.Lock()
-		runs := g.m["key"].call.runs
+		e := g.m["key"]
+		e.mu.RLock()
+		runs := e.call.runs
+		e.mu.RUnlock()
 		g.mu.Unlock()
 		if runs == 2 {
 			break
