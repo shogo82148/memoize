@@ -67,7 +67,7 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	if c == nil {
 		// it is the first call.
 		c = new(call[V])
-		c.ctx, c.cancel = context.WithCancel(context.Background())
+		c.ctx, c.cancel = context.WithCancel(&detachedContext{ctx})
 		e.call = c
 		go do(g, e, c, key, fn)
 	}

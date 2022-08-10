@@ -223,6 +223,27 @@ func TestDoCancel(t *testing.T) {
 	}
 }
 
+func TestDoContext(t *testing.T) {
+	type key struct {
+		name string
+	}
+
+	var g Group[string, int]
+	fn := func(ctx context.Context, _ string) (int, time.Time, error) {
+		val := ctx.Value(key{"hoge"})
+		if val != "fuga" {
+			t.Errorf("want fuga, got %q", val)
+		}
+		return 0, nowFunc().Add(time.Second), nil
+	}
+
+	ctx := context.WithValue(context.Background(), key{"hoge"}, "fuga")
+	_, _, err := g.Do(ctx, "foobar", fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func benchmarkDo(parallelism int) func(b *testing.B) {
 	return func(b *testing.B) {
 		b.SetParallelism(parallelism)
