@@ -316,36 +316,40 @@ func BenchmarkDo(b *testing.B) {
 func TestForget(t *testing.T) {
 	var g Group[string, int]
 
+	var (
+		firstStarted  = make(chan struct{})
+		unblockFirst  = make(chan struct{})
+		firstFinished = make(chan struct{})
+	)
+
 	go func() {
 		g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
-			time.Sleep(100 * time.Millisecond)
+			close(firstStarted)
+			<-unblockFirst
+			close(firstFinished)
 			return
 		})
 	}()
-	time.Sleep(50 * time.Millisecond)
+	<-firstStarted
 	g.Forget("key")
 
-	secondResult := make(chan int, 1)
-	go func() {
-		ret, _, _ := g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
-			time.Sleep(100 * time.Millisecond)
-			return 2, time.Time{}, nil
-		})
-		secondResult <- ret
-	}()
+	unblockSecond := make(chan struct{})
+	secondResult := g.DoChan(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
+		<-unblockSecond
+		return 2, time.Time{}, nil
+	})
 
-	time.Sleep(10 * time.Millisecond)
-	thirdResult := make(chan int, 1)
-	go func() {
-		ret, _, _ := g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
-			return 3, time.Time{}, nil
-		})
-		thirdResult <- ret
-	}()
+	close(unblockFirst)
+	<-firstFinished
 
+	thirdResult := g.DoChan(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
+		return 3, time.Time{}, nil
+	})
+
+	close(unblockSecond)
 	<-secondResult
 	ret := <-thirdResult
-	if ret != 2 {
-		t.Errorf("We should receive result produced by second call, expected: 2, got %d", ret)
+	if ret.Val != 2 {
+		t.Errorf("We should receive result produced by second call, expected: 2, got %d", ret.Val)
 	}
 }

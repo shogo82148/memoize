@@ -61,13 +61,13 @@ type call[V any] struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	runs   int
-	chans  []chan<- result[V]
+	chans  []chan<- Result[V]
 }
 
-type result[V any] struct {
-	val       V
-	expiresAt time.Time
-	err       error
+type Result[V any] struct {
+	Val       V
+	ExpiresAt time.Time
+	Err       error
 }
 
 // Do executes and memoizes the results of the given function, making sure that only one execution is in-flight for a given key at a time.
@@ -109,14 +109,14 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 		e.forgot = false
 		go do(g, e, c, key, fn)
 	}
-	ch := make(chan result[V], 1)
+	ch := make(chan Result[V], 1)
 	c.chans = append(c.chans, ch)
 	c.runs++
 	e.mu.Unlock()
 
 	select {
 	case ret := <-ch:
-		return ret.val, ret.expiresAt, ret.err
+		return ret.Val, ret.ExpiresAt, ret.Err
 	case <-ctx.Done():
 		e.mu.Lock()
 		c.runs--
@@ -134,8 +134,60 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	}
 }
 
+// DoChan is like Do but returns a channel that will receive the
+// results when they are ready.
+//
+// The returned channel will not be closed.
+func (g *Group[K, V]) DoChan(ctx context.Context, key K, fn func(ctx context.Context, key K) (val V, expiresAt time.Time, err error)) <-chan Result[V] {
+	now := nowFunc()
+
+	g.mu.Lock()
+	if g.m == nil {
+		g.m = make(map[K]*entry[V])
+	}
+	var e *entry[V]
+	var ok bool
+	if e, ok = g.m[key]; ok {
+		e.mu.RLock()
+		val, expiresAt := e.val, e.expiresAt
+		e.mu.RUnlock()
+		if now.Before(expiresAt) {
+			// the cache is available.
+			g.mu.Unlock()
+			ch := make(chan Result[V], 1)
+			ch <- Result[V]{
+				Val:       val,
+				ExpiresAt: expiresAt,
+			}
+			return ch
+		}
+	} else {
+		// there is no entry. create a new one.
+		e = &entry[V]{}
+		g.m[key] = e
+	}
+	g.mu.Unlock()
+
+	// the cache is expired or unavailable.
+	e.mu.Lock()
+	c := e.call
+	if c == nil || e.forgot {
+		// it is the first call.
+		c = new(call[V])
+		c.ctx, c.cancel = context.WithCancel(&detachedContext{ctx})
+		e.call = c
+		e.forgot = false
+		go do(g, e, c, key, fn)
+	}
+	ch := make(chan Result[V], 1)
+	c.chans = append(c.chans, ch)
+	c.runs++
+	e.mu.Unlock()
+	return ch
+}
+
 func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn func(ctx context.Context, key K) (V, time.Time, error)) {
-	var ret result[V]
+	var ret Result[V]
 
 	normalReturn := false
 	recovered := false
@@ -145,15 +197,15 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 	defer func() {
 		// the given function invoked runtime.Goexit
 		if !normalReturn && !recovered {
-			ret.err = errGoexit
+			ret.Err = errGoexit
 		}
 
 		e.mu.Lock()
 		if e.call == c {
 			// save to the cache
-			if !e.forgot && ret.err == nil {
-				e.val = ret.val
-				e.expiresAt = ret.expiresAt
+			if !e.forgot && ret.Err == nil {
+				e.val = ret.Val
+				e.expiresAt = ret.ExpiresAt
 			}
 			// to avoid adding new channels to c.chans
 			e.call = nil
@@ -162,9 +214,9 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 		chans := c.chans
 		e.mu.Unlock()
 
-		if e, ok := ret.err.(*panicError); ok {
+		if e, ok := ret.Err.(*panicError); ok {
 			panic(e)
-		} else if ret.err == errGoexit {
+		} else if ret.Err == errGoexit {
 			// Already in the process of goexit, no need to call again
 		} else {
 			// Normal return
@@ -187,12 +239,12 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 				// the time we know that, the part of the stack trace relevant to the
 				// panic has been discarded.
 				if r := recover(); r != nil {
-					ret.err = newPanicError(r)
+					ret.Err = newPanicError(r)
 				}
 			}
 		}()
 
-		ret.val, ret.expiresAt, ret.err = fn(c.ctx, key)
+		ret.Val, ret.ExpiresAt, ret.Err = fn(c.ctx, key)
 		normalReturn = true
 	}()
 
