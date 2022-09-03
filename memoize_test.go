@@ -326,18 +326,20 @@ func TestForget(t *testing.T) {
 		g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
 			close(firstStarted)
 			<-unblockFirst
-			close(firstFinished)
 			return
 		})
+		close(firstFinished)
 	}()
 	<-firstStarted
 	g.Forget("key")
 
 	unblockSecond := make(chan struct{})
+	unblockThird := make(chan struct{})
 	secondResult := make(chan int, 1)
 	go func() {
 		ret, _, _ := g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
 			<-unblockSecond
+			<-unblockThird
 			return 2, time.Time{}, nil
 		})
 		secondResult <- ret
@@ -345,6 +347,7 @@ func TestForget(t *testing.T) {
 
 	close(unblockFirst)
 	<-firstFinished
+	unblockSecond <- struct{}{}
 
 	thirdResult := make(chan int, 1)
 	go func() {
@@ -354,7 +357,7 @@ func TestForget(t *testing.T) {
 		thirdResult <- ret
 	}()
 
-	close(unblockSecond)
+	close(unblockThird)
 	<-secondResult
 	ret := <-thirdResult
 	if ret != 2 {
