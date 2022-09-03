@@ -120,7 +120,10 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 		c.runs--
 		if c.runs == 0 {
 			c.cancel()
-			e.call = nil // to avoid adding new channels to c.chans
+			if e.call == c {
+				// to avoid adding new channels to c.chans
+				e.call = nil
+			}
 		}
 		e.mu.Unlock()
 		var zero V
@@ -142,14 +145,18 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 			ret.err = errGoexit
 		}
 
-		// save to the cache
 		e.mu.Lock()
-		e.call = nil // to avoid adding new channels to c.chans
-		chans := c.chans
-		if ret.err == nil {
-			e.val = ret.val
-			e.expiresAt = ret.expiresAt
+		if e.call == c {
+			// to avoid adding new channels to c.chans
+			e.call = nil
+
+			// save to the cache
+			if ret.err == nil {
+				e.val = ret.val
+				e.expiresAt = ret.expiresAt
+			}
 		}
+		chans := c.chans
 		e.mu.Unlock()
 
 		if e, ok := ret.err.(*panicError); ok {
@@ -189,6 +196,19 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 	if !normalReturn {
 		recovered = true
 	}
+}
+
+// Forget tells the singleflight to forget about a key.  Future calls
+// to Do for this key will call the function rather than waiting for
+// an earlier call to complete.
+func (g *Group[K, V]) Forget(key K) {
+	g.mu.Lock()
+	e, ok := g.m[key]
+	if !ok {
+		return
+	}
+	e.call = nil
+	g.mu.Unlock()
 }
 
 // GC deletes the expired items from the cache.

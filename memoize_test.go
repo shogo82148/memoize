@@ -312,3 +312,52 @@ func BenchmarkDo(b *testing.B) {
 	b.Run("1000", benchmarkDo(1000))
 	b.Run("10000", benchmarkDo(10000))
 }
+
+func TestForget(t *testing.T) {
+	var g Group[string, int]
+
+	var (
+		firstStarted  = make(chan struct{})
+		unblockFirst  = make(chan struct{})
+		firstFinished = make(chan struct{})
+	)
+
+	go func() {
+		g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
+			close(firstStarted)
+			<-unblockFirst
+			close(firstFinished)
+			return
+		})
+	}()
+	<-firstStarted
+	g.Forget("key")
+
+	unblockSecond := make(chan struct{})
+	secondResult := make(chan int, 1)
+	go func() {
+		ret, _, _ := g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
+			<-unblockSecond
+			return 2, time.Time{}, nil
+		})
+		secondResult <- ret
+	}()
+
+	close(unblockFirst)
+	<-firstFinished
+
+	thirdResult := make(chan int, 1)
+	go func() {
+		ret, _, _ := g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
+			return 3, time.Time{}, nil
+		})
+		thirdResult <- ret
+	}()
+
+	close(unblockSecond)
+	<-secondResult
+	ret := <-thirdResult
+	if ret != 2 {
+		t.Errorf("We should receive result produced by second call, expected: 2, got %d", ret)
+	}
+}
