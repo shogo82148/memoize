@@ -1,3 +1,5 @@
+// Package memoize provides a duplicate function call suppression and caching mechanism.
+// It is similar to [golang.org/x/sync/singleflight], but it caches the results.
 package memoize
 
 import (
@@ -41,7 +43,7 @@ func newPanicError(v interface{}) error {
 	return &panicError{value: v, stack: stack}
 }
 
-// Group memoizes the calls of Func with expiration.
+// Group represents a class of work and forms a namespace in which units of work can be executed with duplicate suppression.
 type Group[K comparable, V any] struct {
 	mu sync.Mutex      // protects m
 	m  map[K]*entry[V] // lazy initialized
@@ -67,7 +69,9 @@ type result[V any] struct {
 	err       error
 }
 
-// Do calls memoized Func.
+// Do executes and memoizes the results of the given function, making sure that only one execution is in-flight for a given key at a time.
+// If a duplicate comes in, the duplicate caller waits for the original to complete and receives the same results.
+// The memoized results are available until expiredAt.
 func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context, key K) (val V, expiresAt time.Time, err error)) (V, time.Time, error) {
 	now := nowFunc()
 
@@ -187,6 +191,7 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 	}
 }
 
+// GC deletes the expired items from the cache.
 func (g *Group[K, V]) GC() {
 	now := nowFunc()
 	g.mu.Lock()
