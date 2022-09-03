@@ -316,39 +316,25 @@ func BenchmarkDo(b *testing.B) {
 func TestForget(t *testing.T) {
 	var g Group[string, int]
 
-	var (
-		firstStarted  = make(chan struct{})
-		unblockFirst  = make(chan struct{})
-		firstFinished = make(chan struct{})
-	)
-
 	go func() {
 		g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
-			close(firstStarted)
-			<-unblockFirst
+			time.Sleep(100 * time.Millisecond)
 			return
 		})
-		close(firstFinished)
 	}()
-	<-firstStarted
+	time.Sleep(50 * time.Millisecond)
 	g.Forget("key")
 
-	unblockSecond := make(chan struct{})
-	unblockThird := make(chan struct{})
 	secondResult := make(chan int, 1)
 	go func() {
 		ret, _, _ := g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
-			<-unblockSecond
-			<-unblockThird
+			time.Sleep(100 * time.Millisecond)
 			return 2, time.Time{}, nil
 		})
 		secondResult <- ret
 	}()
 
-	close(unblockFirst)
-	<-firstFinished
-	unblockSecond <- struct{}{}
-
+	time.Sleep(10 * time.Millisecond)
 	thirdResult := make(chan int, 1)
 	go func() {
 		ret, _, _ := g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
@@ -357,7 +343,6 @@ func TestForget(t *testing.T) {
 		thirdResult <- ret
 	}()
 
-	close(unblockThird)
 	<-secondResult
 	ret := <-thirdResult
 	if ret != 2 {
