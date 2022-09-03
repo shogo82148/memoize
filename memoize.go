@@ -53,6 +53,7 @@ type entry[V any] struct {
 	mu        sync.RWMutex
 	val       V
 	expiresAt time.Time
+	forgot    bool
 	call      *call[V]
 }
 
@@ -100,11 +101,12 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	// the cache is expired or unavailable.
 	e.mu.Lock()
 	c := e.call
-	if c == nil {
+	if c == nil || e.forgot {
 		// it is the first call.
 		c = new(call[V])
 		c.ctx, c.cancel = context.WithCancel(&detachedContext{ctx})
 		e.call = c
+		e.forgot = false
 		go do(g, e, c, key, fn)
 	}
 	ch := make(chan result[V], 1)
@@ -120,7 +122,11 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 		c.runs--
 		if c.runs == 0 {
 			c.cancel()
-			e.call = nil // to avoid adding new channels to c.chans
+			// to avoid adding new channels to c.chans
+			if e.call == c {
+				e.call = nil
+				e.forgot = false
+			}
 		}
 		e.mu.Unlock()
 		var zero V
@@ -142,14 +148,18 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 			ret.err = errGoexit
 		}
 
-		// save to the cache
 		e.mu.Lock()
-		e.call = nil // to avoid adding new channels to c.chans
-		chans := c.chans
-		if ret.err == nil {
-			e.val = ret.val
-			e.expiresAt = ret.expiresAt
+		if e.call == c {
+			// save to the cache
+			if !e.forgot && ret.err == nil {
+				e.val = ret.val
+				e.expiresAt = ret.expiresAt
+			}
+			// to avoid adding new channels to c.chans
+			e.call = nil
+			e.forgot = false
 		}
+		chans := c.chans
 		e.mu.Unlock()
 
 		if e, ok := ret.err.(*panicError); ok {
@@ -189,6 +199,21 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 	if !normalReturn {
 		recovered = true
 	}
+}
+
+// Forget tells the singleflight to forget about a key.  Future calls
+// to Do for this key will call the function rather than waiting for
+// an earlier call to complete.
+func (g *Group[K, V]) Forget(key K) {
+	g.mu.Lock()
+	e, ok := g.m[key]
+	if !ok {
+		return
+	}
+	e.mu.Lock()
+	e.forgot = true
+	e.mu.Unlock()
+	g.mu.Unlock()
 }
 
 // GC deletes the expired items from the cache.

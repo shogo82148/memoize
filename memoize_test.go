@@ -312,3 +312,40 @@ func BenchmarkDo(b *testing.B) {
 	b.Run("1000", benchmarkDo(1000))
 	b.Run("10000", benchmarkDo(10000))
 }
+
+func TestForget(t *testing.T) {
+	var g Group[string, int]
+
+	go func() {
+		g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
+			time.Sleep(100 * time.Millisecond)
+			return
+		})
+	}()
+	time.Sleep(50 * time.Millisecond)
+	g.Forget("key")
+
+	secondResult := make(chan int, 1)
+	go func() {
+		ret, _, _ := g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
+			time.Sleep(100 * time.Millisecond)
+			return 2, time.Time{}, nil
+		})
+		secondResult <- ret
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	thirdResult := make(chan int, 1)
+	go func() {
+		ret, _, _ := g.Do(context.Background(), "key", func(ctx context.Context, key string) (val int, expiresAt time.Time, err error) {
+			return 3, time.Time{}, nil
+		})
+		thirdResult <- ret
+	}()
+
+	<-secondResult
+	ret := <-thirdResult
+	if ret != 2 {
+		t.Errorf("We should receive result produced by second call, expected: 2, got %d", ret)
+	}
+}
