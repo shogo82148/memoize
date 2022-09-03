@@ -106,12 +106,12 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 		c = new(call[V])
 		c.ctx, c.cancel = context.WithCancel(&detachedContext{ctx})
 		e.call = c
+		e.forgot = false
 		go do(g, e, c, key, fn)
 	}
 	ch := make(chan result[V], 1)
 	c.chans = append(c.chans, ch)
 	c.runs++
-	e.forgot = false
 	e.mu.Unlock()
 
 	select {
@@ -125,6 +125,7 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 			// to avoid adding new channels to c.chans
 			if e.call == c {
 				e.call = nil
+				e.forgot = false
 			}
 		}
 		e.mu.Unlock()
@@ -148,14 +149,15 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 		}
 
 		e.mu.Lock()
-		// to avoid adding new channels to c.chans
 		if e.call == c {
+			// save to the cache
+			if !e.forgot && ret.err == nil {
+				e.val = ret.val
+				e.expiresAt = ret.expiresAt
+			}
+			// to avoid adding new channels to c.chans
 			e.call = nil
-		}
-		// save to the cache
-		if !e.forgot && ret.err == nil {
-			e.val = ret.val
-			e.expiresAt = ret.expiresAt
+			e.forgot = false
 		}
 		chans := c.chans
 		e.mu.Unlock()
