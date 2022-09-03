@@ -53,6 +53,7 @@ type entry[V any] struct {
 	mu        sync.RWMutex
 	val       V
 	expiresAt time.Time
+	forgot    bool
 	call      *call[V]
 }
 
@@ -100,7 +101,7 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	// the cache is expired or unavailable.
 	e.mu.Lock()
 	c := e.call
-	if c == nil {
+	if c == nil || e.forgot {
 		// it is the first call.
 		c = new(call[V])
 		c.ctx, c.cancel = context.WithCancel(&detachedContext{ctx})
@@ -110,6 +111,7 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	ch := make(chan result[V], 1)
 	c.chans = append(c.chans, ch)
 	c.runs++
+	e.forgot = false
 	e.mu.Unlock()
 
 	select {
@@ -120,8 +122,8 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 		c.runs--
 		if c.runs == 0 {
 			c.cancel()
+			// to avoid adding new channels to c.chans
 			if e.call == c {
-				// to avoid adding new channels to c.chans
 				e.call = nil
 			}
 		}
@@ -146,15 +148,14 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 		}
 
 		e.mu.Lock()
+		// to avoid adding new channels to c.chans
 		if e.call == c {
-			// to avoid adding new channels to c.chans
 			e.call = nil
-
-			// save to the cache
-			if ret.err == nil {
-				e.val = ret.val
-				e.expiresAt = ret.expiresAt
-			}
+		}
+		// save to the cache
+		if !e.forgot && ret.err == nil {
+			e.val = ret.val
+			e.expiresAt = ret.expiresAt
 		}
 		chans := c.chans
 		e.mu.Unlock()
@@ -207,7 +208,9 @@ func (g *Group[K, V]) Forget(key K) {
 	if !ok {
 		return
 	}
-	e.call = nil
+	e.mu.Lock()
+	e.forgot = true
+	e.mu.Unlock()
 	g.mu.Unlock()
 }
 
