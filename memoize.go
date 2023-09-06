@@ -104,7 +104,7 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	if c == nil || e.forgot {
 		// it is the first call.
 		c = new(call[V])
-		c.ctx, c.cancel = context.WithCancel(&detachedContext{ctx})
+		c.ctx, c.cancel = context.WithCancel(withoutCancel(ctx))
 		e.call = c
 		e.forgot = false
 		go do(g, e, c, key, fn)
@@ -174,7 +174,7 @@ func (g *Group[K, V]) DoChan(ctx context.Context, key K, fn func(ctx context.Con
 	if c == nil || e.forgot {
 		// it is the first call.
 		c = new(call[V])
-		c.ctx, c.cancel = context.WithCancel(&detachedContext{ctx})
+		c.ctx, c.cancel = context.WithCancel(withoutCancel(ctx))
 		e.call = c
 		e.forgot = false
 		go do(g, e, c, key, fn)
