@@ -1,3 +1,5 @@
+//go:build !go1.21
+
 package memoize
 
 import (
@@ -7,6 +9,10 @@ import (
 )
 
 var _ context.Context = (*detachedContext)(nil)
+
+func withoutCancel(ctx context.Context) context.Context {
+	return &detachedContext{ctx}
+}
 
 // detachedContext is never canceled and no deadline.
 // whether it has values.
