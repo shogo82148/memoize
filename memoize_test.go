@@ -3,6 +3,7 @@ package memoize
 import (
 	"context"
 	"errors"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -275,6 +276,38 @@ func TestPanicDo(t *testing.T) {
 		if panicCount != n {
 			t.Errorf("panic count = %d; want %d", panicCount, n)
 		}
+	case <-time.After(time.Second):
+		t.Errorf("Do hangs")
+	}
+}
+
+func TestGoexitDo(t *testing.T) {
+	var g Group[string, int]
+	fn := func(ctx context.Context, _ string) (int, time.Time, error) {
+		runtime.Goexit()
+		return 0, time.Time{}, nil
+	}
+
+	const n = 5
+	waited := int32(n)
+	done := make(chan struct{})
+	for i := 0; i < n; i++ {
+		go func() {
+			var err error
+			defer func() {
+				if err != nil {
+					t.Errorf("Error should be nil, but got: %v", err)
+				}
+				if atomic.AddInt32(&waited, -1) == 0 {
+					close(done)
+				}
+			}()
+			_, _, err = g.Do(context.Background(), "key", fn)
+		}()
+	}
+
+	select {
+	case <-done:
 	case <-time.After(time.Second):
 		t.Errorf("Do hangs")
 	}

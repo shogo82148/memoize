@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -119,6 +120,9 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 		if e, ok := ret.Err.(*panicError); ok {
 			panic(e)
 		}
+		if ret.Err == errGoexit {
+			runtime.Goexit()
+		}
 		return ret.Val, ret.ExpiresAt, ret.Err
 	case <-ctx.Done():
 		e.mu.Lock()
@@ -217,14 +221,10 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 		chans := c.chans
 		e.mu.Unlock()
 
-		if ret.Err == errGoexit {
-			// Already in the process of goexit, no need to call again
-		} else {
-			// Normal return
-			// notify the result to the callers
-			for _, ch := range chans {
-				ch <- ret
-			}
+		// Normal return
+		// notify the result to the callers
+		for _, ch := range chans {
+			ch <- ret
 		}
 	}()
 
