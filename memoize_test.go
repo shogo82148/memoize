@@ -1,13 +1,9 @@
 package memoize
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"os"
-	"os/exec"
-	"runtime"
-	"strings"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -250,40 +246,37 @@ func TestDoContext(t *testing.T) {
 }
 
 func TestPanicDo(t *testing.T) {
-	if runtime.GOOS == "js" {
-		t.Skipf("js does not support exec")
+	var g Group[string, int]
+	fn := func(ctx context.Context, _ string) (int, time.Time, error) {
+		panic("something wrong!!")
 	}
 
-	if os.Getenv("TEST_PANIC_DO") != "" {
-		var g Group[string, int]
-		fn := func(ctx context.Context, _ string) (int, time.Time, error) {
-			panic("Panicking in Do")
+	const n = 5
+	waited := int32(n)
+	panicCount := int32(0)
+	done := make(chan struct{})
+	for i := 0; i < n; i++ {
+		go func() {
+			defer func() {
+				if err := recover(); err != nil {
+					t.Logf("Got panic: %v\n%s", err, debug.Stack())
+					atomic.AddInt32(&panicCount, 1)
+				}
+				if atomic.AddInt32(&waited, -1) == 0 {
+					close(done)
+				}
+			}()
+			g.Do(context.Background(), "key", fn)
+		}()
+	}
+
+	select {
+	case <-done:
+		if panicCount != n {
+			t.Errorf("panic count = %d; want %d", panicCount, n)
 		}
-		g.Do(context.Background(), "key", fn)
-		t.Fatalf("Do unexpectedly returned")
-	}
-
-	t.Parallel()
-
-	cmd := exec.Command(os.Args[0], "-test.run="+t.Name(), "-test.v")
-	cmd.Env = append(os.Environ(), "TEST_PANIC_DO=1")
-	out := new(bytes.Buffer)
-	cmd.Stdout = out
-	cmd.Stderr = out
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-
-	err := cmd.Wait()
-	t.Logf("%s:\n%s", strings.Join(cmd.Args, " "), out)
-	if err == nil {
-		t.Errorf("Test subprocess passed; want a crash due to panic in DoChan")
-	}
-	if bytes.Contains(out.Bytes(), []byte("Do unexpectedly returned")) {
-		t.Errorf("Test subprocess failed with an unexpected failure mode.")
-	}
-	if !bytes.Contains(out.Bytes(), []byte("Panicking in Do")) {
-		t.Errorf("Test subprocess failed, but the crash isn't caused by panicking in Do")
+	case <-time.After(time.Second):
+		t.Errorf("Do hangs")
 	}
 }
 

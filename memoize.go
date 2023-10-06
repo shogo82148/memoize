@@ -116,6 +116,9 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 
 	select {
 	case ret := <-ch:
+		if e, ok := ret.Err.(*panicError); ok {
+			panic(e)
+		}
 		return ret.Val, ret.ExpiresAt, ret.Err
 	case <-ctx.Done():
 		e.mu.Lock()
@@ -214,9 +217,7 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 		chans := c.chans
 		e.mu.Unlock()
 
-		if e, ok := ret.Err.(*panicError); ok {
-			panic(e)
-		} else if ret.Err == errGoexit {
+		if ret.Err == errGoexit {
 			// Already in the process of goexit, no need to call again
 		} else {
 			// Normal return
