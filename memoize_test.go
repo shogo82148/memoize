@@ -287,6 +287,64 @@ func TestPanicDo(t *testing.T) {
 	}
 }
 
+type errValue struct{}
+
+func (err *errValue) Error() string {
+	return "error value"
+}
+
+func TestPanicErrorUnwrap(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name             string
+		panicValue       interface{}
+		wrappedErrorType bool
+	}{
+		{
+			name:             "panicError wraps non-error type",
+			panicValue:       &panicError{value: "string value"},
+			wrappedErrorType: false,
+		},
+		{
+			name:             "panicError wraps error type",
+			panicValue:       &panicError{value: new(errValue)},
+			wrappedErrorType: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			var recovered interface{}
+			group := new(Group[string, int])
+			func() {
+				defer func() {
+					recovered = recover()
+					t.Logf("after panic(%#v) in group.Do, recovered %#v", tc.panicValue, recovered)
+				}()
+				_, _, _ = group.Do(context.Background(), "key", func(ctx context.Context, _ string) (int, time.Time, error) {
+					panic(tc.panicValue)
+				})
+			}()
+
+			if recovered == nil {
+				t.Fatal("expected a non-nil panic value")
+			}
+
+			err, ok := recovered.(error)
+			if !ok {
+				t.Fatalf("expected panic value to be an error, got %T", recovered)
+			}
+
+			if !errors.Is(err, new(errValue)) && tc.wrappedErrorType {
+				t.Errorf("unexpected wrapped error type %T; want %T", err, new(errValue))
+			}
+		})
+	}
+}
+
 func benchmarkDo(parallelism int) func(b *testing.B) {
 	return func(b *testing.B) {
 		b.SetParallelism(parallelism)
