@@ -63,7 +63,6 @@ type entry[V any] struct {
 	mu        sync.RWMutex
 	val       V
 	expiresAt time.Time
-	forgot    bool
 	call      *call[V]
 }
 
@@ -111,12 +110,11 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 	// the cache is expired or unavailable.
 	e.mu.Lock()
 	c := e.call
-	if c == nil || e.forgot {
+	if c == nil {
 		// it is the first call.
 		c = new(call[V])
 		c.ctx, c.cancel = context.WithCancel(withoutCancel(ctx))
 		e.call = c
-		e.forgot = false
 		go do(g, e, c, key, fn)
 	}
 	ch := make(chan Result[V], 1)
@@ -141,7 +139,6 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 			// to avoid adding new channels to c.chans
 			if e.call == c {
 				e.call = nil
-				e.forgot = false
 			}
 		}
 		e.mu.Unlock()
@@ -187,12 +184,11 @@ func (g *Group[K, V]) DoChan(ctx context.Context, key K, fn func(ctx context.Con
 	// the cache is expired or unavailable.
 	e.mu.Lock()
 	c := e.call
-	if c == nil || e.forgot {
+	if c == nil {
 		// it is the first call.
 		c = new(call[V])
 		c.ctx, c.cancel = context.WithCancel(withoutCancel(ctx))
 		e.call = c
-		e.forgot = false
 		go do(g, e, c, key, fn)
 	}
 	ch := make(chan Result[V], 1)
@@ -219,13 +215,12 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 		e.mu.Lock()
 		if e.call == c {
 			// save to the cache
-			if !e.forgot && ret.Err == nil {
+			if ret.Err == nil {
 				e.val = ret.Val
 				e.expiresAt = ret.ExpiresAt
 			}
 			// to avoid adding new channels to c.chans
 			e.call = nil
-			e.forgot = false
 		}
 		chans := c.chans
 		e.mu.Unlock()
@@ -267,17 +262,10 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 // to Do for this key will call the function rather than waiting for
 // an earlier call to complete.
 func (g *Group[K, V]) Forget(key K) {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
 
-	e, ok := g.m[key]
-	if !ok {
-		return
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.forgot = true
+	delete(g.m, key)
 }
 
 // GC deletes the expired items from the cache.
