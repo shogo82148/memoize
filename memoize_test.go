@@ -400,6 +400,9 @@ func BenchmarkDo(b *testing.B) {
 func TestForget(t *testing.T) {
 	var g Group[string, int]
 
+	// Forget should do nothing if the key does not exist.
+	g.Forget("key")
+
 	var (
 		firstStarted  = make(chan struct{})
 		unblockFirst  = make(chan struct{})

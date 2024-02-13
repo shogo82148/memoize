@@ -55,7 +55,7 @@ func newPanicError(v interface{}) error {
 
 // Group represents a class of work and forms a namespace in which units of work can be executed with duplicate suppression.
 type Group[K comparable, V any] struct {
-	mu sync.Mutex      // protects m
+	mu sync.RWMutex    // protects m
 	m  map[K]*entry[V] // lazy initialized
 }
 
@@ -267,15 +267,17 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 // to Do for this key will call the function rather than waiting for
 // an earlier call to complete.
 func (g *Group[K, V]) Forget(key K) {
-	g.mu.Lock()
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
 	e, ok := g.m[key]
 	if !ok {
 		return
 	}
 	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	e.forgot = true
-	e.mu.Unlock()
-	g.mu.Unlock()
 }
 
 // GC deletes the expired items from the cache.
