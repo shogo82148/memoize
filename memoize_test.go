@@ -180,14 +180,14 @@ func TestDoCancel(t *testing.T) {
 	// wait for goroutine 1 and 2 to be blocked by fn
 	for {
 		time.Sleep(time.Millisecond)
-		g.mu.Lock()
-		e := g.m["key"]
-		e.mu.RLock()
-		runs := e.call.runs
-		e.mu.RUnlock()
-		g.mu.Unlock()
-		if runs == 2 {
-			break
+		if e, ok := g.m.Load("key"); ok {
+			e := e.(*entry[any])
+			e.mu.RLock()
+			runs := e.call.runs
+			e.mu.RUnlock()
+			if runs == 2 {
+				break
+			}
 		}
 	}
 
