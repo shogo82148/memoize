@@ -55,8 +55,7 @@ func newPanicError(v interface{}) error {
 
 // Group represents a class of work and forms a namespace in which units of work can be executed with duplicate suppression.
 type Group[K comparable, V any] struct {
-	mu sync.RWMutex    // protects m
-	m  map[K]*entry[V] // lazy initialized
+	m sync.Map // K -> *entry
 }
 
 type entry[V any] struct {
@@ -85,30 +84,26 @@ type Result[V any] struct {
 func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context, key K) (val V, expiresAt time.Time, err error)) (V, time.Time, error) {
 	now := nowFunc()
 
-	g.mu.Lock()
-	if g.m == nil {
-		g.m = make(map[K]*entry[V])
-	}
-	var e *entry[V]
-	var ok bool
-	if e, ok = g.m[key]; ok {
+	actual, loaded := g.m.LoadOrStore(key, new(entry[V]))
+	e := actual.(*entry[V])
+	if loaded {
 		e.mu.RLock()
 		val, expiresAt := e.val, e.expiresAt
 		e.mu.RUnlock()
 		if now.Before(expiresAt) {
 			// the cache is available.
-			g.mu.Unlock()
 			return val, expiresAt, nil
 		}
-	} else {
-		// there is no entry. create a new one.
-		e = &entry[V]{}
-		g.m[key] = e
 	}
-	g.mu.Unlock()
 
 	// the cache is expired or unavailable.
 	e.mu.Lock()
+	if !e.expiresAt.IsZero() && now.Before(e.expiresAt) {
+		// the cache is available.
+		val, expiresAt := e.val, e.expiresAt
+		e.mu.Unlock()
+		return val, expiresAt, nil
+	}
 	c := e.call
 	if c == nil {
 		// it is the first call.
@@ -154,35 +149,35 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(ctx context.Context
 func (g *Group[K, V]) DoChan(ctx context.Context, key K, fn func(ctx context.Context, key K) (val V, expiresAt time.Time, err error)) <-chan Result[V] {
 	now := nowFunc()
 
-	g.mu.Lock()
-	if g.m == nil {
-		g.m = make(map[K]*entry[V])
-	}
-	var e *entry[V]
-	var ok bool
-	if e, ok = g.m[key]; ok {
+	ch := make(chan Result[V], 1)
+	actual, loaded := g.m.LoadOrStore(key, new(entry[V]))
+	e := actual.(*entry[V])
+	if loaded {
 		e.mu.RLock()
 		val, expiresAt := e.val, e.expiresAt
 		e.mu.RUnlock()
 		if now.Before(expiresAt) {
 			// the cache is available.
-			g.mu.Unlock()
-			ch := make(chan Result[V], 1)
 			ch <- Result[V]{
 				Val:       val,
 				ExpiresAt: expiresAt,
 			}
 			return ch
 		}
-	} else {
-		// there is no entry. create a new one.
-		e = &entry[V]{}
-		g.m[key] = e
 	}
-	g.mu.Unlock()
 
 	// the cache is expired or unavailable.
 	e.mu.Lock()
+	if !e.expiresAt.IsZero() && now.Before(e.expiresAt) {
+		// the cache is available.
+		val, expiresAt := e.val, e.expiresAt
+		e.mu.Unlock()
+		ch <- Result[V]{
+			Val:       val,
+			ExpiresAt: expiresAt,
+		}
+		return ch
+	}
 	c := e.call
 	if c == nil {
 		// it is the first call.
@@ -191,7 +186,6 @@ func (g *Group[K, V]) DoChan(ctx context.Context, key K, fn func(ctx context.Con
 		e.call = c
 		go do(g, e, c, key, fn)
 	}
-	ch := make(chan Result[V], 1)
 	c.chans = append(c.chans, ch)
 	c.runs++
 	e.mu.Unlock()
@@ -262,22 +256,19 @@ func do[K comparable, V any](g *Group[K, V], e *entry[V], c *call[V], key K, fn 
 // to Do for this key will call the function rather than waiting for
 // an earlier call to complete.
 func (g *Group[K, V]) Forget(key K) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	delete(g.m, key)
+	g.m.Delete(key)
 }
 
 // GC deletes the expired items from the cache.
 func (g *Group[K, V]) GC() {
 	now := nowFunc()
-	g.mu.Lock()
-	for key, e := range g.m {
+	g.m.Range(func(key, value any) bool {
+		e := value.(*entry[V])
 		e.mu.RLock()
 		if !now.Before(e.expiresAt) && (e.call == nil || e.call.runs == 0) {
-			delete(g.m, key)
+			g.m.Delete(key)
 		}
 		e.mu.RUnlock()
-	}
-	g.mu.Unlock()
+		return true
+	})
 }
