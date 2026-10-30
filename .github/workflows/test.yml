@@ -18,10 +18,10 @@ jobs:
           - "1.18"
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v5.1.0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v6.5.0
         with:
           go-version: ${{ matrix.go }}
           cache: true
@@ -29,7 +29,7 @@ jobs:
       - name: test
         run: |
           go test -v -coverprofile=profile.cov ./...
-      - uses: shogo82148/actions-goveralls@v1
+      - uses: shogo82148/actions-goveralls@v1.11.5
         with:
           path-to-profile: profile.cov
           flag-name: Go-${{ matrix.go }}
@@ -41,6 +41,6 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: shogo82148/actions-goveralls@v1
+      - uses: shogo82148/actions-goveralls@v1.11.5
         with:
           parallel-finished: true
